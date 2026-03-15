@@ -92,7 +92,7 @@ fn handle_authentication(stream: &mut TcpStream) {
             response = read_response(&mut reader).unwrap();
             write_response(response);
         } else if code == "230".to_string() {
-            println!("{}", line);
+            print!("{}", line);
         } else {
             eprintln!("Login Failed");
         }
@@ -121,7 +121,7 @@ fn read_response(reader: &mut BufReader<TcpStream>) -> std::io::Result<Vec<Strin
 
 fn write_response(response: Vec<String>) {
     for line in response {
-        println!("{line}");
+        print!("{line}");
     }
 }
 
