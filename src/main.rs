@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Write},
     net::TcpStream,
 };
 
@@ -50,20 +50,16 @@ fn command_parsing(stream: &mut TcpStream) {
             .read_line(&mut input)
             .expect("Expect an input..");
 
+        let command: Vec<&str> = input.trim().split_whitespace().collect();
+        if command.len() == 0 {
+            continue;
+        }
+
         stream.write_all(input.as_bytes()).unwrap();
 
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let response = read_response(&mut reader).unwrap();
-
-        for line in response {
-            println!("{line}");
-        }
-
-        let command: Vec<&str> = input.trim().split_whitespace().collect();
-
-        if command.len() == 0 {
-            continue;
-        }
+        write_response(response);
 
         match command[0] {
             "quit" => break,
@@ -82,17 +78,20 @@ fn handle_authentication(stream: &mut TcpStream) {
     let user_response = format!("USER {}", user_name);
     stream.write_all(user_response.as_bytes()).unwrap();
     let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let response = read_response(&mut reader).unwrap();
+    let mut response = read_response(&mut reader).unwrap();
 
     for line in response {
-        if line[..3] == "331".to_string() {
+        let code = line[..3].to_string();
+        if code == "331".to_string() {
             print!("Enter the Password: ");
             io::stdout().flush().unwrap();
             let mut password = String::new();
             io::stdin().read_line(&mut password).unwrap();
             let password_response = format!("PASS {}", password);
             stream.write_all(password_response.as_bytes()).unwrap();
-        } else if line[..3] == "230".to_string() {
+            response = read_response(&mut reader).unwrap();
+            write_response(response);
+        } else if code == "230".to_string() {
             println!("{}", line);
         } else {
             eprintln!("Login Failed");
@@ -120,6 +119,12 @@ fn read_response(reader: &mut BufReader<TcpStream>) -> std::io::Result<Vec<Strin
     Ok(lines)
 }
 
+fn write_response(response: Vec<String>) {
+    for line in response {
+        println!("{line}");
+    }
+}
+
 fn main() -> Result<(), ArgError> {
     let args: Vec<String> = args_parsing(env::args())?;
     let port: u16;
@@ -134,11 +139,10 @@ fn main() -> Result<(), ArgError> {
         "Connection to server {} established...",
         stream.peer_addr().unwrap()
     );
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let response = read_response(&mut reader).unwrap();
+    write_response(response);
     handle_authentication(&mut stream);
-    let mut buffer = [0; 1024];
-    stream.read(&mut buffer).unwrap();
-    let response = String::from_utf8_lossy(&buffer);
-    println!("{response}");
     command_parsing(&mut stream);
     Ok(())
 }
