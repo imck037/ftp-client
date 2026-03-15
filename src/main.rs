@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     net::TcpStream,
 };
 
@@ -29,6 +29,10 @@ enum Command {
     QUIT,
 }
 
+struct Connection {
+    datastream: Option<TcpStream>,
+}
+
 fn args_parsing(args: env::Args) -> Result<Vec<String>, ArgError> {
     let args: Vec<String> = args.collect();
     if args.len() == 1 {
@@ -41,6 +45,7 @@ fn args_parsing(args: env::Args) -> Result<Vec<String>, ArgError> {
 }
 
 fn command_parsing(stream: &mut TcpStream) {
+    let mut conn = Connection { datastream: None };
     loop {
         print!("ftp> ");
         io::stdout().flush().unwrap();
@@ -59,12 +64,41 @@ fn command_parsing(stream: &mut TcpStream) {
 
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let response = read_response(&mut reader).unwrap();
-        write_response(response);
+        write_response(&response);
 
-        match command[0] {
-            "quit" => break,
+        match command[0].to_uppercase().as_str() {
+            "PASV" => {
+                conn.datastream = handle_pasv(stream, &response[0]);
+            }
+            "LIST" => {
+                handle_list(stream, &mut conn);
+            }
+            "QUIT" => break,
             _ => continue,
-        }
+        };
+    }
+}
+
+fn handle_list(stream: &mut TcpStream, conn: &mut Connection) {
+    if let Some(data_stream) = &conn.datastream {
+        let mut buffer = String::new();
+        let mut data_reader = BufReader::new(data_stream.try_clone().unwrap());
+        data_reader.read_to_string(&mut buffer).unwrap();
+        print!("{buffer}");
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let response = read_response(&mut reader).unwrap();
+        write_response(&response);
+        conn.datastream = None;
+    } else {
+        stream.write_all(b"PASV\r\n").unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let response = read_response(&mut reader).unwrap();
+        conn.datastream = handle_pasv(stream, &response[0]);
+        stream.write_all(b"LIST\r\n").unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let response = read_response(&mut reader).unwrap();
+        write_response(&response);
+        handle_list(stream, conn);
     }
 }
 
@@ -90,7 +124,7 @@ fn handle_authentication(stream: &mut TcpStream) {
             let password_response = format!("PASS {}", password);
             stream.write_all(password_response.as_bytes()).unwrap();
             response = read_response(&mut reader).unwrap();
-            write_response(response);
+            write_response(&response);
         } else if code == "230".to_string() {
             print!("{}", line);
         } else {
@@ -103,7 +137,6 @@ fn read_response(reader: &mut BufReader<TcpStream>) -> std::io::Result<Vec<Strin
     let mut lines = Vec::new();
     let mut line = String::new();
     reader.read_line(&mut line)?;
-    // let code = line[..3].to_string();
     lines.push(line.clone());
 
     if line.as_bytes().get(3) == Some(&b'-') {
@@ -119,10 +152,28 @@ fn read_response(reader: &mut BufReader<TcpStream>) -> std::io::Result<Vec<Strin
     Ok(lines)
 }
 
-fn write_response(response: Vec<String>) {
+fn write_response(response: &Vec<String>) {
     for line in response {
         print!("{line}");
     }
+}
+
+fn handle_pasv(stream: &mut TcpStream, response_line: &str) -> Option<TcpStream> {
+    let start = response_line.find("(").unwrap() + 1;
+    let end = response_line.find(")").unwrap();
+    let numbers: Vec<u16> = response_line[start..end]
+        .split(',')
+        .filter_map(|num| num.parse::<u16>().ok())
+        .collect();
+    if numbers.len() != 6 {
+        println!("Error openning the passive mode connection.");
+        return None;
+    }
+    let ip = stream.peer_addr().unwrap().ip();
+    let port = numbers[4] * 256 + numbers[5];
+    let addr = format!("{}:{}", ip, port);
+    let data_connection = TcpStream::connect(addr).expect("Connection error.");
+    Some(data_connection)
 }
 
 fn main() -> Result<(), ArgError> {
@@ -141,7 +192,7 @@ fn main() -> Result<(), ArgError> {
     );
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let response = read_response(&mut reader).unwrap();
-    write_response(response);
+    write_response(&response);
     handle_authentication(&mut stream);
     command_parsing(&mut stream);
     Ok(())
